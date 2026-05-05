@@ -1,7 +1,7 @@
 const std = @import("std");
 
 const Allocator = std.mem.Allocator;
-const version = "0.1.0";
+const version = "0.1.1";
 const max_input_bytes = 64 * 1024 * 1024;
 
 const OutputMode = enum {

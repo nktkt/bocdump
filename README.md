@@ -28,8 +28,8 @@ basic exotic cell metadata.
 Download a release asset for your platform:
 
 ```sh
-curl -LO https://github.com/nktkt/bocdump/releases/download/v0.1.0/bocdump-aarch64-macos.tar.gz
-curl -LO https://github.com/nktkt/bocdump/releases/download/v0.1.0/SHA256SUMS
+curl -LO https://github.com/nktkt/bocdump/releases/download/v0.1.1/bocdump-aarch64-macos.tar.gz
+curl -LO https://github.com/nktkt/bocdump/releases/download/v0.1.1/SHA256SUMS
 shasum -a 256 -c SHA256SUMS --ignore-missing
 tar -xzf bocdump-aarch64-macos.tar.gz
 ./bocdump-aarch64-macos/bocdump --version
@@ -112,6 +112,7 @@ zig build test
 zig build -Doptimize=ReleaseSafe
 npm ci
 npm run verify:fixtures
+npm run fuzz
 npm run smoke:release
 ```
 
@@ -125,6 +126,9 @@ and compares root hashes, depths, CRC status, and indexed output shape.
 The release smoke test downloads the current platform asset, verifies it
 against `SHA256SUMS`, extracts it, and runs `bocdump --version` plus a sample
 BoC dump.
+
+Release builds also publish `SHA256SUMS`, `bocdump.spdx.json`, and GitHub
+artifact attestations for release assets.
 
 ## Status
 

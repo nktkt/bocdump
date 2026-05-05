@@ -1,11 +1,13 @@
 {
   "name": "bocdump",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "description": "Fixture verification for the bocdump Zig CLI",
   "type": "module",
   "scripts": {
     "verify:fixtures": "node scripts/verify-fixtures.mjs",
+    "fuzz": "node scripts/fuzz-boc.mjs",
+    "generate:sbom": "node scripts/generate-sbom.mjs",
     "smoke:release": "bash scripts/smoke-release-asset.sh"
   },
   "devDependencies": {

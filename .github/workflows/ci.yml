@@ -47,3 +47,6 @@ jobs:
 
       - name: Verify fixtures
         run: npm run verify:fixtures
+
+      - name: Fuzz BoC parser
+        run: npm run fuzz

@@ -2,7 +2,7 @@
 set -euo pipefail
 
 repo="${REPO:-nktkt/bocdump}"
-tag="${RELEASE_TAG:-v0.1.0}"
+tag="${RELEASE_TAG:-v0.1.1}"
 work_dir="$(mktemp -d)"
 trap 'rm -rf "$work_dir"' EXIT
 
