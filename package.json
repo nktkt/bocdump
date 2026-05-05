@@ -5,7 +5,8 @@
   "description": "Fixture verification for the bocdump Zig CLI",
   "type": "module",
   "scripts": {
-    "verify:fixtures": "node scripts/verify-fixtures.mjs"
+    "verify:fixtures": "node scripts/verify-fixtures.mjs",
+    "smoke:release": "bash scripts/smoke-release-asset.sh"
   },
   "devDependencies": {
     "@ton/core": "0.63.1"

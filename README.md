@@ -1,5 +1,10 @@
 # bocdump
 
+[![CI](https://github.com/nktkt/bocdump/actions/workflows/ci.yml/badge.svg)](https://github.com/nktkt/bocdump/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/nktkt/bocdump)](https://github.com/nktkt/bocdump/releases)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Zig](https://img.shields.io/badge/Zig-0.15.2-f7a41d.svg)](https://ziglang.org/)
+
 `bocdump` is a Zig CLI for inspecting and validating TON Bag-of-Cells (BoC)
 payloads.
 
@@ -17,6 +22,34 @@ basic exotic cell metadata.
 - Recomputes ordinary cell representation hashes and depths
 - Performs basic validation for pruned branch, library reference, Merkle proof,
   and Merkle update exotic cells
+
+## Install
+
+Download a release asset for your platform:
+
+```sh
+curl -LO https://github.com/nktkt/bocdump/releases/download/v0.1.0/bocdump-aarch64-macos.tar.gz
+curl -LO https://github.com/nktkt/bocdump/releases/download/v0.1.0/SHA256SUMS
+shasum -a 256 -c SHA256SUMS --ignore-missing
+tar -xzf bocdump-aarch64-macos.tar.gz
+./bocdump-aarch64-macos/bocdump --version
+```
+
+Available release assets:
+
+- `bocdump-x86_64-linux.tar.gz`
+- `bocdump-aarch64-linux.tar.gz`
+- `bocdump-x86_64-macos.tar.gz`
+- `bocdump-aarch64-macos.tar.gz`
+
+Or build from source:
+
+```sh
+git clone https://github.com/nktkt/bocdump.git
+cd bocdump
+zig build -Doptimize=ReleaseSafe
+zig-out/bin/bocdump --version
+```
 
 ## Usage
 
@@ -79,6 +112,7 @@ zig build test
 zig build -Doptimize=ReleaseSafe
 npm ci
 npm run verify:fixtures
+npm run smoke:release
 ```
 
 The tests include CRC32C, ordinary cell hashes/depths, indexed BoC offsets,
@@ -87,6 +121,10 @@ parsing.
 
 The fixture verifier generates BoCs with `@ton/core`, runs `bocdump --json`,
 and compares root hashes, depths, CRC status, and indexed output shape.
+
+The release smoke test downloads the current platform asset, verifies it
+against `SHA256SUMS`, extracts it, and runs `bocdump --version` plus a sample
+BoC dump.
 
 ## Status
 
