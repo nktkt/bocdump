@@ -1,7 +1,7 @@
 const std = @import("std");
 
 const Allocator = std.mem.Allocator;
-const version = "0.1.1";
+const version = "0.2.0";
 const max_input_bytes = 64 * 1024 * 1024;
 
 const OutputMode = enum {
@@ -15,10 +15,21 @@ const InputKind = enum {
     base64,
 };
 
+const DecodeKind = enum {
+    message,
+
+    fn label(self: DecodeKind) []const u8 {
+        return switch (self) {
+            .message => "message",
+        };
+    }
+};
+
 const CliOptions = struct {
     output: OutputMode = .text,
     input_kind: ?InputKind = null,
     input_value: ?[]const u8 = null,
+    decode: ?DecodeKind = null,
 };
 
 const Magic = enum {
@@ -179,6 +190,8 @@ fn run() !void {
     }
 
     const options = try parseArgs(args);
+    if (options.decode != null and options.output != .json) return error.DecodeRequiresJson;
+
     const input = try loadInput(allocator, options);
     defer allocator.free(input);
 
@@ -187,7 +200,7 @@ fn run() !void {
 
     switch (options.output) {
         .text => try dumpBoc(stdout, &boc),
-        .json => try dumpBocJson(stdout, &boc),
+        .json => try dumpBocJson(stdout, &boc, options.decode),
     }
 }
 
@@ -200,8 +213,10 @@ fn printUsage(writer: anytype) !void {
         \\  bocdump [--json] --file <path>
         \\  bocdump [--json] <path>
         \\  bocdump [--json] --file -
+        \\  bocdump --json --decode message --hex <hex>
         \\
         \\Dumps and validates TON Bag-of-Cells headers, cell records, hashes, and depths.
+        \\Use --decode message to parse the root cell as a TON Message and append JSON decode output.
         \\
     );
 }
@@ -217,6 +232,13 @@ fn parseArgs(args: []const [:0]const u8) !CliOptions {
         }
         if (std.mem.eql(u8, arg, "--text")) {
             options.output = .text;
+            continue;
+        }
+        if (std.mem.eql(u8, arg, "--decode")) {
+            if (options.decode != null) return error.InvalidArguments;
+            if (i + 1 >= args.len) return error.InvalidArguments;
+            i += 1;
+            options.decode = try parseDecodeKind(args[i]);
             continue;
         }
         if (std.mem.eql(u8, arg, "--hex") or std.mem.eql(u8, arg, "--base64") or std.mem.eql(u8, arg, "--file")) {
@@ -239,6 +261,11 @@ fn parseArgs(args: []const [:0]const u8) !CliOptions {
     }
     if (options.input_kind == null or options.input_value == null) return error.InvalidArguments;
     return options;
+}
+
+fn parseDecodeKind(value: []const u8) !DecodeKind {
+    if (std.mem.eql(u8, value, "message")) return .message;
+    return error.InvalidArguments;
 }
 
 fn loadInput(allocator: Allocator, options: CliOptions) ![]u8 {
@@ -752,6 +779,296 @@ fn paddedBitLength(data: []const u8) !usize {
     return data.len * 8 - trailing_zero_bits - 1;
 }
 
+const Anycast = struct {
+    depth: usize,
+    prefix: [4]u8,
+};
+
+const InternalAddress = struct {
+    workchain: i16,
+    hash: [32]u8,
+    anycast: ?Anycast,
+};
+
+const ExternalAddress = struct {
+    bits: usize,
+    value: [64]u8,
+};
+
+const DecodedAddress = union(enum) {
+    none,
+    internal: InternalAddress,
+    external: ExternalAddress,
+};
+
+const AddressExpectation = enum {
+    internal,
+    maybe_external,
+};
+
+const ExtraCurrencyCollection = union(enum) {
+    empty,
+    dict_ref: usize,
+};
+
+const CurrencyCollection = struct {
+    coins: u128,
+    extra_currencies: ExtraCurrencyCollection,
+};
+
+const MessageInfo = union(enum) {
+    internal: InternalMessageInfo,
+    external_in: ExternalInMessageInfo,
+    external_out: ExternalOutMessageInfo,
+};
+
+const InternalMessageInfo = struct {
+    ihr_disabled: bool,
+    bounce: bool,
+    bounced: bool,
+    src: DecodedAddress,
+    dest: DecodedAddress,
+    value: CurrencyCollection,
+    ihr_fee: u128,
+    forward_fee: u128,
+    created_lt: u128,
+    created_at: u64,
+};
+
+const ExternalInMessageInfo = struct {
+    src: DecodedAddress,
+    dest: DecodedAddress,
+    import_fee: u128,
+};
+
+const ExternalOutMessageInfo = struct {
+    src: DecodedAddress,
+    dest: DecodedAddress,
+    created_lt: u128,
+    created_at: u64,
+};
+
+const SliceSummary = struct {
+    bits: usize,
+    refs: usize,
+};
+
+const StateInitLocation = union(enum) {
+    none,
+    ref: usize,
+};
+
+const BodyLocation = union(enum) {
+    in_place: SliceSummary,
+    ref: usize,
+};
+
+const DecodedMessage = struct {
+    root: usize,
+    info: MessageInfo,
+    init: StateInitLocation,
+    body: BodyLocation,
+};
+
+const CellSlice = struct {
+    boc: *const Boc,
+    cell_index: usize,
+    bit_pos: usize = 0,
+    ref_pos: usize = 0,
+
+    fn cell(self: *const CellSlice) *const Cell {
+        return &self.boc.cells[self.cell_index];
+    }
+
+    fn remainingBits(self: *const CellSlice) usize {
+        return self.cell().data_bits - self.bit_pos;
+    }
+
+    fn remainingRefs(self: *const CellSlice) usize {
+        return self.cell().refs.len - self.ref_pos;
+    }
+
+    fn readBit(self: *CellSlice) !bool {
+        if (self.bit_pos >= self.cell().data_bits) return error.DecodeShortCellBits;
+        const byte = self.cell().data_bytes[self.bit_pos / 8];
+        const shift = @as(u3, @intCast(7 - (self.bit_pos % 8)));
+        const bit = ((byte >> shift) & 1) == 1;
+        self.bit_pos += 1;
+        return bit;
+    }
+
+    fn readUInt(self: *CellSlice, bits: usize) !u128 {
+        if (bits > 128) return error.DecodeIntegerTooWide;
+        var value: u128 = 0;
+        var i: usize = 0;
+        while (i < bits) : (i += 1) {
+            value = (value << 1) | @intFromBool(try self.readBit());
+        }
+        return value;
+    }
+
+    fn readInt8(self: *CellSlice) !i16 {
+        const raw = @as(u8, @intCast(try self.readUInt(8)));
+        return if (raw < 128) @as(i16, raw) else @as(i16, raw) - 256;
+    }
+
+    fn readBitsToBytes(self: *CellSlice, out: []u8, bits: usize) !void {
+        if (bits > out.len * 8) return error.DecodeBufferTooSmall;
+        @memset(out, 0);
+        var i: usize = 0;
+        while (i < bits) : (i += 1) {
+            if (try self.readBit()) {
+                const shift = @as(u3, @intCast(7 - (i % 8)));
+                out[i / 8] |= @as(u8, 1) << shift;
+            }
+        }
+    }
+
+    fn readRef(self: *CellSlice) !usize {
+        if (self.ref_pos >= self.cell().refs.len) return error.DecodeShortCellRefs;
+        const ref = self.cell().refs[self.ref_pos];
+        self.ref_pos += 1;
+        return ref;
+    }
+
+    fn consumeRemaining(self: *CellSlice) SliceSummary {
+        const summary = SliceSummary{
+            .bits = self.remainingBits(),
+            .refs = self.remainingRefs(),
+        };
+        self.bit_pos = self.cell().data_bits;
+        self.ref_pos = self.cell().refs.len;
+        return summary;
+    }
+};
+
+fn decodeMessage(boc: *const Boc) !DecodedMessage {
+    if (boc.roots.len != 1) return error.DecodeExpectedSingleRoot;
+    const root = boc.roots[0];
+    if (boc.cells[root].exotic) return error.DecodeRootExotic;
+
+    var slice = CellSlice{ .boc = boc, .cell_index = root };
+    const info = try decodeCommonMessageInfo(&slice);
+
+    const init = try decodeStateInitLocation(&slice);
+    const body = try decodeBodyLocation(&slice);
+    if (slice.remainingBits() != 0 or slice.remainingRefs() != 0) return error.DecodeTrailingData;
+
+    return .{
+        .root = root,
+        .info = info,
+        .init = init,
+        .body = body,
+    };
+}
+
+fn decodeCommonMessageInfo(slice: *CellSlice) !MessageInfo {
+    if (!try slice.readBit()) {
+        return .{ .internal = .{
+            .ihr_disabled = try slice.readBit(),
+            .bounce = try slice.readBit(),
+            .bounced = try slice.readBit(),
+            .src = try decodeAddress(slice, .internal),
+            .dest = try decodeAddress(slice, .internal),
+            .value = try decodeCurrencyCollection(slice),
+            .ihr_fee = try decodeCoins(slice),
+            .forward_fee = try decodeCoins(slice),
+            .created_lt = try slice.readUInt(64),
+            .created_at = @as(u64, @intCast(try slice.readUInt(32))),
+        } };
+    }
+
+    if (!try slice.readBit()) {
+        return .{ .external_in = .{
+            .src = try decodeAddress(slice, .maybe_external),
+            .dest = try decodeAddress(slice, .internal),
+            .import_fee = try decodeCoins(slice),
+        } };
+    }
+
+    return .{ .external_out = .{
+        .src = try decodeAddress(slice, .internal),
+        .dest = try decodeAddress(slice, .maybe_external),
+        .created_lt = try slice.readUInt(64),
+        .created_at = @as(u64, @intCast(try slice.readUInt(32))),
+    } };
+}
+
+fn decodeStateInitLocation(slice: *CellSlice) !StateInitLocation {
+    if (!try slice.readBit()) return .none;
+    if (try slice.readBit()) return .{ .ref = try slice.readRef() };
+    return error.DecodeInlineStateInitUnsupported;
+}
+
+fn decodeBodyLocation(slice: *CellSlice) !BodyLocation {
+    if (try slice.readBit()) {
+        return .{ .ref = try slice.readRef() };
+    }
+    return .{ .in_place = slice.consumeRemaining() };
+}
+
+fn decodeAddress(slice: *CellSlice, expectation: AddressExpectation) !DecodedAddress {
+    const tag = try slice.readUInt(2);
+    switch (tag) {
+        0 => {
+            if (expectation == .internal) return error.DecodeInvalidAddress;
+            return .none;
+        },
+        1 => {
+            if (expectation == .internal) return error.DecodeInvalidAddress;
+            return .{ .external = try decodeExternalAddress(slice) };
+        },
+        2 => return .{ .internal = try decodeInternalAddress(slice) },
+        3 => return error.DecodeUnsupportedVariableAddress,
+        else => unreachable,
+    }
+}
+
+fn decodeInternalAddress(slice: *CellSlice) !InternalAddress {
+    const anycast = try decodeMaybeAnycast(slice);
+    const workchain = try slice.readInt8();
+    var hash: [32]u8 = undefined;
+    try slice.readBitsToBytes(&hash, 256);
+    return .{
+        .workchain = workchain,
+        .hash = hash,
+        .anycast = anycast,
+    };
+}
+
+fn decodeExternalAddress(slice: *CellSlice) !ExternalAddress {
+    const bits = @as(usize, @intCast(try slice.readUInt(9)));
+    var value = [_]u8{0} ** 64;
+    try slice.readBitsToBytes(value[0..((bits + 7) / 8)], bits);
+    return .{ .bits = bits, .value = value };
+}
+
+fn decodeMaybeAnycast(slice: *CellSlice) !?Anycast {
+    if (!try slice.readBit()) return null;
+    const depth = @as(usize, @intCast(try slice.readUInt(5)));
+    if (depth == 0 or depth > 30) return error.DecodeInvalidAnycast;
+    var prefix = [_]u8{0} ** 4;
+    try slice.readBitsToBytes(prefix[0..((depth + 7) / 8)], depth);
+    return .{ .depth = depth, .prefix = prefix };
+}
+
+fn decodeCurrencyCollection(slice: *CellSlice) !CurrencyCollection {
+    const coins = try decodeCoins(slice);
+    const extra_currencies: ExtraCurrencyCollection = if (try slice.readBit())
+        .{ .dict_ref = try slice.readRef() }
+    else
+        .empty;
+    return .{
+        .coins = coins,
+        .extra_currencies = extra_currencies,
+    };
+}
+
+fn decodeCoins(slice: *CellSlice) !u128 {
+    const size = @as(usize, @intCast(try slice.readUInt(4)));
+    return slice.readUInt(size * 8);
+}
+
 fn dumpBoc(writer: anytype, boc: *const Boc) !void {
     try writer.print("BoC dump\n", .{});
     try writer.print("  magic: 0x{x:0>8} ({s})\n", .{ boc.magic_value, boc.magic.label() });
@@ -824,7 +1141,7 @@ fn dumpBoc(writer: anytype, boc: *const Boc) !void {
     }
 }
 
-fn dumpBocJson(writer: anytype, boc: *const Boc) !void {
+fn dumpBocJson(writer: anytype, boc: *const Boc, decode: ?DecodeKind) !void {
     try writer.writeAll("{\n");
     try writer.print("  \"magic\":\"0x{x:0>8}\",\n", .{boc.magic_value});
     try writer.print("  \"magic_kind\":", .{});
@@ -867,7 +1184,127 @@ fn dumpBocJson(writer: anytype, boc: *const Boc) !void {
         try printJsonIntArray(writer, cell.refs);
         try writer.writeByte('}');
     }
-    try writer.writeAll("\n  ]\n}\n");
+    try writer.writeAll("\n  ]");
+    if (decode) |kind| {
+        try writer.writeAll(",\n  \"decode\":");
+        try dumpDecodeJson(writer, boc, kind);
+    }
+    try writer.writeAll("\n}\n");
+}
+
+fn dumpDecodeJson(writer: anytype, boc: *const Boc, decode: DecodeKind) !void {
+    switch (decode) {
+        .message => {
+            const message = try decodeMessage(boc);
+            try dumpDecodedMessageJson(writer, &message);
+        },
+    }
+}
+
+fn dumpDecodedMessageJson(writer: anytype, message: *const DecodedMessage) !void {
+    try writer.print("{{\"kind\":\"message\",\"root\":{d},\"message\":{{", .{message.root});
+    try writer.writeAll("\"info\":");
+    try dumpMessageInfoJson(writer, &message.info);
+    try writer.writeAll(",\"init\":");
+    try dumpStateInitLocationJson(writer, message.init);
+    try writer.writeAll(",\"body\":");
+    try dumpBodyLocationJson(writer, message.body);
+    try writer.writeAll("}}");
+}
+
+fn dumpMessageInfoJson(writer: anytype, info: *const MessageInfo) !void {
+    switch (info.*) {
+        .internal => |internal| {
+            try writer.writeAll("{\"type\":\"internal\"");
+            try writer.print(",\"ihr_disabled\":{},\"bounce\":{},\"bounced\":{}", .{ internal.ihr_disabled, internal.bounce, internal.bounced });
+            try writer.writeAll(",\"src\":");
+            try dumpAddressJson(writer, internal.src);
+            try writer.writeAll(",\"dest\":");
+            try dumpAddressJson(writer, internal.dest);
+            try writer.writeAll(",\"value\":");
+            try dumpCurrencyCollectionJson(writer, internal.value);
+            try writer.writeAll(",\"ihr_fee\":");
+            try printJsonDecimalString(writer, internal.ihr_fee);
+            try writer.writeAll(",\"forward_fee\":");
+            try printJsonDecimalString(writer, internal.forward_fee);
+            try writer.writeAll(",\"created_lt\":");
+            try printJsonDecimalString(writer, internal.created_lt);
+            try writer.print(",\"created_at\":{d}", .{internal.created_at});
+            try writer.writeByte('}');
+        },
+        .external_in => |external_in| {
+            try writer.writeAll("{\"type\":\"external-in\",\"src\":");
+            try dumpAddressJson(writer, external_in.src);
+            try writer.writeAll(",\"dest\":");
+            try dumpAddressJson(writer, external_in.dest);
+            try writer.writeAll(",\"import_fee\":");
+            try printJsonDecimalString(writer, external_in.import_fee);
+            try writer.writeByte('}');
+        },
+        .external_out => |external_out| {
+            try writer.writeAll("{\"type\":\"external-out\",\"src\":");
+            try dumpAddressJson(writer, external_out.src);
+            try writer.writeAll(",\"dest\":");
+            try dumpAddressJson(writer, external_out.dest);
+            try writer.writeAll(",\"created_lt\":");
+            try printJsonDecimalString(writer, external_out.created_lt);
+            try writer.print(",\"created_at\":{d}", .{external_out.created_at});
+            try writer.writeByte('}');
+        },
+    }
+}
+
+fn dumpAddressJson(writer: anytype, address: DecodedAddress) !void {
+    switch (address) {
+        .none => try writer.writeAll("{\"type\":\"none\"}"),
+        .internal => |internal| {
+            try writer.print("{{\"type\":\"internal\",\"workchain\":{d},\"hash\":", .{internal.workchain});
+            try printJsonHexString(writer, &internal.hash);
+            try writer.writeAll(",\"anycast\":");
+            try dumpAnycastJson(writer, internal.anycast);
+            try writer.writeByte('}');
+        },
+        .external => |external| {
+            try writer.print("{{\"type\":\"external\",\"bits\":{d},\"value\":", .{external.bits});
+            try printJsonHexString(writer, external.value[0..((external.bits + 7) / 8)]);
+            try writer.writeByte('}');
+        },
+    }
+}
+
+fn dumpAnycastJson(writer: anytype, anycast: ?Anycast) !void {
+    if (anycast) |value| {
+        try writer.print("{{\"depth\":{d},\"prefix\":", .{value.depth});
+        try printJsonHexString(writer, value.prefix[0..((value.depth + 7) / 8)]);
+        try writer.writeByte('}');
+    } else {
+        try writer.writeAll("null");
+    }
+}
+
+fn dumpCurrencyCollectionJson(writer: anytype, value: CurrencyCollection) !void {
+    try writer.writeAll("{\"coins\":");
+    try printJsonDecimalString(writer, value.coins);
+    try writer.writeAll(",\"extra_currencies\":");
+    switch (value.extra_currencies) {
+        .empty => try writer.writeAll("{\"present\":false}"),
+        .dict_ref => |ref| try writer.print("{{\"present\":true,\"root\":{d}}}", .{ref}),
+    }
+    try writer.writeByte('}');
+}
+
+fn dumpStateInitLocationJson(writer: anytype, init: StateInitLocation) !void {
+    switch (init) {
+        .none => try writer.writeAll("null"),
+        .ref => |ref| try writer.print("{{\"storage\":\"ref\",\"root\":{d}}}", .{ref}),
+    }
+}
+
+fn dumpBodyLocationJson(writer: anytype, body: BodyLocation) !void {
+    switch (body) {
+        .in_place => |in_place| try writer.print("{{\"storage\":\"inline\",\"bits\":{d},\"refs\":{d}}}", .{ in_place.bits, in_place.refs }),
+        .ref => |ref| try writer.print("{{\"storage\":\"ref\",\"root\":{d}}}", .{ref}),
+    }
 }
 
 fn printIndexList(writer: anytype, items: []const usize) !void {
@@ -909,6 +1346,10 @@ fn printJsonHexString(writer: anytype, bytes: []const u8) !void {
         try writer.print("{x:0>2}", .{byte});
     }
     try writer.writeByte('"');
+}
+
+fn printJsonDecimalString(writer: anytype, value: u128) !void {
+    try writer.print("\"{d}\"", .{value});
 }
 
 fn printHex(writer: anytype, bytes: []const u8) !void {
@@ -1005,6 +1446,89 @@ test "parse @ton/core generated fixture" {
     try expectHex(&boc.cells[1].computed_hashes[3], "c6b68699361fd51dcf64d97ccd926801fd84bc87712e21aa3633e40c1b3760a2");
 }
 
+test "decode @ton/core external-in message" {
+    const hex = "b5ee9c720101010100250000458800222222222222222222222222222222222222222222222222222222222222222204";
+    var buf: [hex.len / 2]u8 = undefined;
+    _ = try std.fmt.hexToBytes(&buf, hex);
+
+    var boc = try parseBoc(std.testing.allocator, &buf);
+    defer boc.deinit();
+
+    const message = try decodeMessage(&boc);
+    try std.testing.expectEqual(@as(usize, 0), message.root);
+    switch (message.info) {
+        .external_in => |info| {
+            switch (info.src) {
+                .none => {},
+                else => return error.TestExpectedEmptyExternalSource,
+            }
+            switch (info.dest) {
+                .internal => |dest| {
+                    try std.testing.expectEqual(@as(i16, 0), dest.workchain);
+                    try expectHex(&dest.hash, "1111111111111111111111111111111111111111111111111111111111111111");
+                },
+                else => return error.TestExpectedInternalDestination,
+            }
+            try std.testing.expectEqual(@as(u128, 0), info.import_fee);
+        },
+        else => return error.TestExpectedExternalInMessage,
+    }
+    try std.testing.expectEqual(StateInitLocation.none, message.init);
+    switch (message.body) {
+        .in_place => |body| {
+            try std.testing.expectEqual(@as(usize, 0), body.bits);
+            try std.testing.expectEqual(@as(usize, 0), body.refs);
+        },
+        else => return error.TestExpectedInlineBody,
+    }
+}
+
+test "decode @ton/core internal message" {
+    const hex = "b5ee9c7201010101005c0000b3680044444444444444444444444444444444444444444444444444444444444444453fccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccd01d6f34540000000000000000540000000e55e6f780c0";
+    var buf: [hex.len / 2]u8 = undefined;
+    _ = try std.fmt.hexToBytes(&buf, hex);
+
+    var boc = try parseBoc(std.testing.allocator, &buf);
+    defer boc.deinit();
+
+    const message = try decodeMessage(&boc);
+    switch (message.info) {
+        .internal => |info| {
+            try std.testing.expect(info.ihr_disabled);
+            try std.testing.expect(info.bounce);
+            try std.testing.expect(!info.bounced);
+            switch (info.src) {
+                .internal => |src| {
+                    try std.testing.expectEqual(@as(i16, 0), src.workchain);
+                    try expectHex(&src.hash, "2222222222222222222222222222222222222222222222222222222222222222");
+                },
+                else => return error.TestExpectedInternalSource,
+            }
+            switch (info.dest) {
+                .internal => |dest| {
+                    try std.testing.expectEqual(@as(i16, -1), dest.workchain);
+                    try expectHex(&dest.hash, "3333333333333333333333333333333333333333333333333333333333333333");
+                },
+                else => return error.TestExpectedInternalDestination,
+            }
+            try std.testing.expectEqual(@as(u128, 123456789), info.value.coins);
+            try std.testing.expectEqual(ExtraCurrencyCollection.empty, info.value.extra_currencies);
+            try std.testing.expectEqual(@as(u128, 0), info.ihr_fee);
+            try std.testing.expectEqual(@as(u128, 0), info.forward_fee);
+            try std.testing.expectEqual(@as(u128, 42), info.created_lt);
+            try std.testing.expectEqual(@as(u64, 7), info.created_at);
+        },
+        else => return error.TestExpectedInternalMessage,
+    }
+    switch (message.body) {
+        .in_place => |body| {
+            try std.testing.expectEqual(@as(usize, 32), body.bits);
+            try std.testing.expectEqual(@as(usize, 0), body.refs);
+        },
+        else => return error.TestExpectedInlineBody,
+    }
+}
+
 test "parse generic BoC with CRC32C" {
     const no_crc_hex = "b5ee9c72410101010002000000";
     var no_crc: [no_crc_hex.len / 2]u8 = undefined;
@@ -1040,9 +1564,10 @@ test "reject non-canonical backwards ref" {
 }
 
 test "decode CLI options" {
-    const args = [_][:0]const u8{ "bocdump", "--json", "--hex", "00" };
+    const args = [_][:0]const u8{ "bocdump", "--json", "--decode", "message", "--hex", "00" };
     const options = try parseArgs(&args);
     try std.testing.expectEqual(OutputMode.json, options.output);
+    try std.testing.expectEqual(DecodeKind.message, options.decode.?);
     try std.testing.expectEqual(InputKind.hex, options.input_kind.?);
     try std.testing.expectEqualStrings("00", options.input_value.?);
 }

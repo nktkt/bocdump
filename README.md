@@ -10,7 +10,8 @@ payloads.
 
 It is designed as a low-level developer tool: it dumps BoC headers, serialized
 cell records, references, computed hashes, computed depths, CRC32C status, and
-basic exotic cell metadata.
+basic exotic cell metadata. It can also decode root cells that contain TON
+`Message` TL-B payloads.
 
 ## Features
 
@@ -22,14 +23,17 @@ basic exotic cell metadata.
 - Recomputes ordinary cell representation hashes and depths
 - Performs basic validation for pruned branch, library reference, Merkle proof,
   and Merkle update exotic cells
+- Decodes TON `Message` roots with `--decode message --json`, including
+  `CommonMsgInfo`, internal and external addresses, coins, optional
+  extra-currency dictionary roots, `StateInit` references, and body storage
 
 ## Install
 
 Download a release asset for your platform:
 
 ```sh
-curl -LO https://github.com/nktkt/bocdump/releases/download/v0.1.1/bocdump-aarch64-macos.tar.gz
-curl -LO https://github.com/nktkt/bocdump/releases/download/v0.1.1/SHA256SUMS
+curl -LO https://github.com/nktkt/bocdump/releases/download/v0.2.0/bocdump-aarch64-macos.tar.gz
+curl -LO https://github.com/nktkt/bocdump/releases/download/v0.2.0/SHA256SUMS
 shasum -a 256 -c SHA256SUMS --ignore-missing
 tar -xzf bocdump-aarch64-macos.tar.gz
 ./bocdump-aarch64-macos/bocdump --version
@@ -58,6 +62,7 @@ zig build
 zig build run -- --version
 zig build run -- --hex b5ee9c724101010100020000004cacb9cd
 zig build run -- --json --file contract.boc
+zig build run -- --json --decode message --file message.boc
 zig-out/bin/bocdump --base64 '<base64-boc>'
 ```
 
@@ -73,13 +78,21 @@ Outputs:
 
 - Text dump by default
 - JSON with `--json`
+- TON message decode with `--json --decode message`
 - Version with `--version`
 
 Example:
 
 ```sh
 zig build run -- --json --hex b5ee9c724101010100020000004cacb9cd
+zig build run -- --json --decode message --hex b5ee9c720101010100250000458800222222222222222222222222222222222222222222222222222222222222222204
 ```
+
+The `--decode message` mode parses the first root as a TON `Message`, appends a
+`decode` object to the JSON output, and reports the message info, source and
+destination addresses, coin values as decimal strings, `StateInit` storage, and
+body storage. Inline `StateInit`, variable-length internal addresses, and
+high-level contract-specific body schemas are intentionally not decoded yet.
 
 ## Validation
 
@@ -95,8 +108,9 @@ The parser validates:
 - basic exotic cell type, size, reference, hash, and depth invariants for
   pruned branch, library reference, Merkle proof, and Merkle update cells
 
-This is a low-level BoC/Cell inspector. It does not decode arbitrary TL-B
-schemas into high-level contract/message objects.
+This is a low-level BoC/Cell inspector with focused TON `Message` decoding. It
+does not decode arbitrary TL-B schemas or high-level contract-specific body
+objects.
 
 ## Requirements
 
@@ -121,7 +135,8 @@ CRC failure rejection, non-canonical reference rejection, and CLI option
 parsing.
 
 The fixture verifier generates BoCs with `@ton/core`, runs `bocdump --json`,
-and compares root hashes, depths, CRC status, and indexed output shape.
+and compares root hashes, depths, CRC status, indexed output shape, and
+decoded external/internal `Message` fields.
 
 The release smoke test downloads the current platform asset, verifies it
 against `SHA256SUMS`, extracts it, and runs `bocdump --version` plus a sample
@@ -133,8 +148,8 @@ artifact attestations for release assets.
 ## Status
 
 This project is intended for developer inspection and validation workflows. It
-is not a replacement for a full TON SDK, a TL-B decoder, or a third-party
-security audit.
+is not a replacement for a full TON SDK, a general TL-B decoder, or a
+third-party security audit.
 
 ## License
 

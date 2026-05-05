@@ -1,6 +1,6 @@
 .{
     .name = .bocdump,
-    .version = "0.1.1",
+    .version = "0.2.0",
     .minimum_zig_version = "0.15.2",
     .paths = .{""},
     .fingerprint = 0xc05d9c99cc1f0d80,
