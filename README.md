@@ -22,6 +22,7 @@ basic exotic cell metadata.
 
 ```sh
 zig build
+zig build run -- --version
 zig build run -- --hex b5ee9c724101010100020000004cacb9cd
 zig build run -- --json --file contract.boc
 zig-out/bin/bocdump --base64 '<base64-boc>'
@@ -39,6 +40,7 @@ Outputs:
 
 - Text dump by default
 - JSON with `--json`
+- Version with `--version`
 
 Example:
 
@@ -75,14 +77,23 @@ Run:
 zig fmt --check build.zig src/main.zig
 zig build test
 zig build -Doptimize=ReleaseSafe
+npm ci
+npm run verify:fixtures
 ```
 
 The tests include CRC32C, ordinary cell hashes/depths, indexed BoC offsets,
 CRC failure rejection, non-canonical reference rejection, and CLI option
 parsing.
 
+The fixture verifier generates BoCs with `@ton/core`, runs `bocdump --json`,
+and compares root hashes, depths, CRC status, and indexed output shape.
+
 ## Status
 
 This project is intended for developer inspection and validation workflows. It
 is not a replacement for a full TON SDK, a TL-B decoder, or a third-party
 security audit.
+
+## License
+
+MIT

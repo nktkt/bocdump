@@ -1,5 +1,6 @@
 .zig-cache/
 zig-out/
+node_modules/
 
 # Local editor and OS files
 .DS_Store

@@ -1,6 +1,7 @@
 const std = @import("std");
 
 const Allocator = std.mem.Allocator;
+const version = "0.1.0";
 const max_input_bytes = 64 * 1024 * 1024;
 
 const OutputMode = enum {
@@ -172,6 +173,10 @@ fn run() !void {
         try printUsage(stdout);
         return;
     }
+    if (args.len == 2 and (std.mem.eql(u8, args[1], "--version") or std.mem.eql(u8, args[1], "-V"))) {
+        try stdout.print("bocdump {s}\n", .{version});
+        return;
+    }
 
     const options = try parseArgs(args);
     const input = try loadInput(allocator, options);
@@ -189,6 +194,7 @@ fn run() !void {
 fn printUsage(writer: anytype) !void {
     try writer.writeAll(
         \\Usage:
+        \\  bocdump --version
         \\  bocdump [--json] --hex <hex>
         \\  bocdump [--json] --base64 <base64>
         \\  bocdump [--json] --file <path>
