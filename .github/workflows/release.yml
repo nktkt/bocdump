@@ -1,7 +1,7 @@
 name: Release
 
 env:
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  ZIG_VERSION: 0.15.2
 
 on:
   push:
@@ -45,12 +45,16 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Setup Zig
-        uses: mlugg/setup-zig@v2
-        with:
-          version: 0.15.2
+        run: |
+          set -euo pipefail
+          zig_dir="zig-x86_64-linux-${ZIG_VERSION}"
+          curl -fsSLo zig.tar.xz "https://ziglang.org/download/${ZIG_VERSION}/${zig_dir}.tar.xz"
+          tar -xf zig.tar.xz
+          echo "$PWD/${zig_dir}" >> "$GITHUB_PATH"
+          "$PWD/${zig_dir}/zig" version
 
       - name: Build
         run: zig build -Doptimize=ReleaseSafe -Dtarget=${{ matrix.target }}

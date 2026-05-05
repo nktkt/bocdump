@@ -1,7 +1,7 @@
 name: CI
 
 env:
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  ZIG_VERSION: 0.15.2
 
 on:
   push:
@@ -13,17 +13,21 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Setup Zig
-        uses: mlugg/setup-zig@v2
-        with:
-          version: 0.15.2
+        run: |
+          set -euo pipefail
+          zig_dir="zig-x86_64-linux-${ZIG_VERSION}"
+          curl -fsSLo zig.tar.xz "https://ziglang.org/download/${ZIG_VERSION}/${zig_dir}.tar.xz"
+          tar -xf zig.tar.xz
+          echo "$PWD/${zig_dir}" >> "$GITHUB_PATH"
+          "$PWD/${zig_dir}/zig" version
 
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
-          node-version: 22
+          node-version: 24
           cache: npm
 
       - name: Install fixture dependencies
